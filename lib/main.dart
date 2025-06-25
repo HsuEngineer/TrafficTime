@@ -3,6 +3,7 @@ import 'pages/bus_page.dart';
 import 'pages/placeholder_page.dart';
 
 void main() {
+  
   runApp(BusTimeApp());
 }
 
