@@ -1,13 +1,11 @@
 class BusRoute {
-  final String name;
-  final int type;
+  final String routeNameZh;
 
-  BusRoute({required this.name, required this.type});
+  BusRoute({required this.routeNameZh});
 
   factory BusRoute.fromJson(Map<String, dynamic> json) {
     return BusRoute(
-      name: json['RouteName']['Zh_tw'],
-      type: json['BusRouteType'],
+      routeNameZh: json['RouteName']?['Zh_tw'] ?? '未知路線',
     );
   }
 }

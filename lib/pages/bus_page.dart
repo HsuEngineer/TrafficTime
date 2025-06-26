@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:dropdown_search/dropdown_search.dart';
 import '../services/tdx_service.dart';
+import '../services/location_service.dart';
 import '../models/bus_route.dart';
 
 class BusPage extends StatefulWidget {
@@ -11,62 +12,77 @@ class BusPage extends StatefulWidget {
 }
 
 class _BusPageState extends State<BusPage> {
-  final TDXService tdxService = TDXService();
+  final TDXService _tdxService = TDXService();
 
-  /// 中文縣市名稱對應 TDX 英文代碼
-  final Map<String, String> cityMap = {
-    'Taipei': '臺北市',
-    'NewTaipei': '新北市',
-    'Taoyuan': '桃園市',
-    'Taichung': '臺中市',
-    'Tainan': '臺南市',
-    'Kaohsiung': '高雄市',
-  };
-
-  String city = 'NewTaipei'; // 預設縣市
-  String keyword = '';
-  String? selectedBus;
+  String? selectedCity;
+  BusRoute? selectedBus;
   String? selectedStart;
   String? selectedEnd;
 
-  List<BusRoute> allRoutes = [];
-  List<String> filteredRoutes = [];
-  List<String> stationList = [];
+  List<BusRoute> busList = [];
+  List<String> stopList = [];
+
+  final Map<String, String> cityMap = {
+    '台北市': 'Taipei',
+    '新北市': 'NewTaipei',
+    '桃園市': 'Taoyuan',
+    '台中市': 'Taichung',
+    '台南市': 'Tainan',
+    '高雄市': 'Kaohsiung',
+    '基隆市': 'Keelung',
+    '新竹市': 'Hsinchu',
+    '嘉義市': 'Chiayi',
+  };
 
   @override
   void initState() {
     super.initState();
-    _loadBusRoutes();
+    _initLocationAndLoadRoutes();
+  }
+
+  Future<void> _initLocationAndLoadRoutes() async {
+    try {
+      final cityZh = await LocationService.getCurrentCity();
+      final cityEn = cityMap[cityZh] ?? 'Taipei';
+
+      setState(() {
+        selectedCity = cityEn;
+      });
+
+      await _loadBusRoutes();
+    } catch (e) {
+      print('❌ 自動取得縣市失敗: $e');
+    }
   }
 
   Future<void> _loadBusRoutes() async {
+    if (selectedCity == null) return;
     try {
-      final routes = await tdxService.fetchBusRoutesTyped(city: city);
+      final routes = await _tdxService.fetchBusRoutesTyped(city: selectedCity!);
+      routes.sort((a, b) => _naturalCompare(a.routeNameZh, b.routeNameZh));
+
       setState(() {
-        allRoutes = routes;
-        _applyFilter();
+        busList = [...routes];
+        selectedBus = null;
+        stopList = [];
+        selectedStart = null;
+        selectedEnd = null;
       });
     } catch (e) {
       print('❌ 載入公車路線失敗: $e');
     }
   }
 
-  void _applyFilter() {
-    final result = allRoutes.where((route) {
-      return keyword.isEmpty || route.name.contains(keyword);
-    }).map((e) => e.name).toSet().toList();
+  Future<void> _loadStopsForSelectedBus() async {
+    if (selectedCity == null || selectedBus == null) return;
 
-    setState(() {
-      filteredRoutes = result;
-      if (!filteredRoutes.contains(selectedBus)) selectedBus = null;
-    });
-  }
-
-  Future<void> _loadBusStops(String routeName) async {
     try {
-      final stops = await tdxService.fetchRouteStops(city: city, routeName: routeName);
+      final stops = await _tdxService.fetchRouteStops(
+        city: selectedCity!,
+        routeName: selectedBus!.routeNameZh,
+      );
       setState(() {
-        stationList = stops;
+        stopList = stops;
         selectedStart = null;
         selectedEnd = null;
       });
@@ -75,173 +91,116 @@ class _BusPageState extends State<BusPage> {
     }
   }
 
+  int _naturalCompare(String a, String b) {
+    final reg = RegExp(r'(\d+)|(\D+)');
+    final aMatches = reg.allMatches(a);
+    final bMatches = reg.allMatches(b);
+    final len = aMatches.length < bMatches.length ? aMatches.length : bMatches.length;
+
+    for (int i = 0; i < len; i++) {
+      final aMatch = aMatches.elementAt(i).group(0)!;
+      final bMatch = bMatches.elementAt(i).group(0)!;
+
+      final aNum = int.tryParse(aMatch);
+      final bNum = int.tryParse(bMatch);
+
+      if (aNum != null && bNum != null) {
+        if (aNum != bNum) return aNum.compareTo(bNum);
+      } else {
+        final cmp = aMatch.compareTo(bMatch);
+        if (cmp != 0) return cmp;
+      }
+    }
+
+    return a.length.compareTo(b.length);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.purple[50],
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Center(
-          child: Card(
-            elevation: 8,
-            shadowColor: Colors.purple[200],
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    "公車路線選擇",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 10),
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('縣市'),
+        DropdownButton<String>(
+          key: const ValueKey('cityDropdown'),
+          value: selectedCity,
+          isExpanded: true,
+          onChanged: (value) {
+            setState(() {
+              selectedCity = value!;
+            });
+            _loadBusRoutes();
+          },
+          items: cityMap.entries
+              .map((entry) => DropdownMenuItem(
+                    value: entry.value,
+                    child: Text(entry.key),
+                  ))
+              .toList(),
+        ),
+        const SizedBox(height: 12),
 
-                  // 🔁 重新載入按鈕
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.refresh),
-                    label: const Text("重新載入路線資料"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange[700],
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                    onPressed: () async {
-                      await tdxService.clearCache();
-                      await _loadBusRoutes();
-                    },
-                  ),
-                  const SizedBox(height: 20),
-
-                  // 縣市選擇
-                  DropdownButtonFormField<String>(
-                    decoration: InputDecoration(
-                      labelText: '選擇縣市',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    value: city,
-                    items: cityMap.entries.map((entry) {
-                      return DropdownMenuItem(
-                        value: entry.key,
-                        child: Text(entry.value),
-                      );
-                    }).toList(),
-                    onChanged: (value) {
-                      if (value != null && value != city) {
-                        setState(() {
-                          city = value;
-                          selectedBus = null;
-                          selectedStart = null;
-                          selectedEnd = null;
-                          stationList = [];
-                          allRoutes = [];
-                          filteredRoutes = [];
-                        });
-                        _loadBusRoutes();
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 12),
-
-                  // 公車路線選擇
-                  DropdownSearch<String>(
-                    key: ValueKey('bus_${city}_$selectedBus'),
-                    popupProps: PopupProps.menu(
-                      showSearchBox: true,
-                      showSelectedItems: true,
-                      searchFieldProps: TextFieldProps(
-                        decoration: InputDecoration(
-                          hintText: "請輸入路線名稱",
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                      ),
-                    ),
-                    dropdownDecoratorProps: DropDownDecoratorProps(
-                      dropdownSearchDecoration: InputDecoration(
-                        labelText: "公車路線",
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                    ),
-                    items: filteredRoutes,
-                    selectedItem: selectedBus,
-                    onChanged: (value) {
-                      setState(() {
-                        selectedBus = value;
-                        stationList = [];
-                        selectedStart = null;
-                        selectedEnd = null;
-                      });
-                      if (value != null) {
-                        _loadBusStops(value);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 20),
-
-                  // 出發站
-                  DropdownButtonFormField<String>(
-                    key: ValueKey('start_$selectedBus'),
-                    decoration: InputDecoration(
-                      labelText: "出發站",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    value: selectedStart,
-                    items: stationList.map((station) {
-                      return DropdownMenuItem(value: station, child: Text(station));
-                    }).toList(),
-                    onChanged: (value) {
-                      setState(() {
-                        selectedStart = value;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 20),
-
-                  // 目的地
-                  DropdownButtonFormField<String>(
-                    key: ValueKey('end_$selectedBus'),
-                    decoration: InputDecoration(
-                      labelText: "目的地",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    value: selectedEnd,
-                    items: stationList.map((station) {
-                      return DropdownMenuItem(value: station, child: Text(station));
-                    }).toList(),
-                    onChanged: (value) {
-                      setState(() {
-                        selectedEnd = value;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 30),
-
-                  // 開始追蹤按鈕
-                  ElevatedButton.icon(
-                    onPressed: (selectedBus != null &&
-                            selectedStart != null &&
-                            selectedEnd != null)
-                        ? () {
-                            print('🚍 追蹤 $selectedBus：從 $selectedStart 到 $selectedEnd in $city');
-                          }
-                        : null,
-                    icon: const Icon(Icons.search),
-                    label: const Text("開始追蹤公車"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepPurple,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(double.infinity, 50),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                ],
-              ),
+        const Text('選擇公車路線'),
+        DropdownSearch<BusRoute>(
+          key: const ValueKey('busDropdownSearch'),
+          selectedItem: selectedBus,
+          items: busList,
+          itemAsString: (route) => route.routeNameZh,
+          dropdownDecoratorProps: const DropDownDecoratorProps(
+            dropdownSearchDecoration: InputDecoration(
+              labelText: '請輸入或選擇路線',
+              border: OutlineInputBorder(),
             ),
           ),
+          onChanged: (route) {
+            setState(() {
+              selectedBus = route;
+            });
+            _loadStopsForSelectedBus();
+          },
+          popupProps: const PopupProps.menu(
+            showSearchBox: true,
+            searchFieldProps: TextFieldProps(
+              decoration: InputDecoration(hintText: '輸入車號（如932）'),
+            ),
+          ),
+          compareFn: (a, b) => a.routeNameZh == b.routeNameZh,
         ),
-      ),
+        const SizedBox(height: 12),
+
+        const Text('起點站'),
+        DropdownButton<String>(
+          key: const ValueKey('startDropdown'),
+          value: selectedStart,
+          isExpanded: true,
+          hint: const Text('請選擇起點'),
+          onChanged: (value) {
+            setState(() {
+              selectedStart = value;
+            });
+          },
+          items: stopList.map((stop) {
+            return DropdownMenuItem(value: stop, child: Text(stop));
+          }).toList(),
+        ),
+        const SizedBox(height: 12),
+
+        const Text('終點站'),
+        DropdownButton<String>(
+          key: const ValueKey('endDropdown'),
+          value: selectedEnd,
+          isExpanded: true,
+          hint: const Text('請選擇終點'),
+          onChanged: (value) {
+            setState(() {
+              selectedEnd = value;
+            });
+          },
+          items: stopList.map((stop) {
+            return DropdownMenuItem(value: stop, child: Text(stop));
+          }).toList(),
+        ),
+      ],
     );
   }
 }
